@@ -1,11 +1,9 @@
 package org.domenscaner;
 
-import inet.ipaddr.AddressComponent;
 import inet.ipaddr.IPAddress;
 import inet.ipaddr.IPAddressSeqRange;
 import inet.ipaddr.IPAddressString;
 import org.apache.http.HttpResponseInterceptor;
-import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.config.Registry;
 import org.apache.http.config.RegistryBuilder;
@@ -22,8 +20,6 @@ import org.apache.http.protocol.HttpContext;
 import org.apache.http.protocol.HttpCoreContext;
 import org.apache.http.ssl.SSLContexts;
 import org.apache.http.ssl.TrustStrategy;
-import sun.net.util.IPAddressUtil;
-import sun.security.x509.IPAddressName;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSession;
@@ -31,65 +27,47 @@ import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.security.KeyManagementException;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateParsingException;
 import java.security.cert.X509Certificate;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
 
 public class DomenScaner {
     public static final String PEER_CERTIFICATES = "PEER_CERTIFICATES";
-    public static void scan(String ipRange, int threadNum, String filename) {//51.38.24.0/24
+    public static List<String> scan(String ipRange, int threadNum, String filename) throws IOException, InterruptedException {
+        FileWriter fw;
+        fw = new FileWriter(filename);
+        BufferedWriter bw = new BufferedWriter(fw);
+
         IPAddressSeqRange startIPAddress = new IPAddressString(ipRange).getSequentialRange();
         List<IPAddress> addresses = new ArrayList<>();
         startIPAddress.iterator().forEachRemaining(addresses::add);
-
-        FileWriter fw;
-        try {
-            fw = new FileWriter(filename + ".txt");
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-        BufferedWriter bw = new BufferedWriter(fw);
-
-        List<List<IPAddress>> addressesGroups = splitArrayList(addresses, addresses.size()/threadNum);
+        List<String> result = Collections.synchronizedList(new ArrayList<>());
+        List<List<IPAddress>> addressesGroups = splitArrayList(addresses, Math.max(addresses.size()/threadNum, 1));
         List<Thread> threads = new ArrayList<>();
 
         for(List<IPAddress> groupAddresses: addressesGroups){
             threads.add(new Thread(() -> {
-                groupAddresses.forEach(ipAddress -> {
+                for(IPAddress ipAddress: groupAddresses){
                     try {
-                        scanIpAddress(ipAddress.toString(), bw);
-                    } catch (IOException e) {
-                        //throw new RuntimeException(e);
-                    } catch (CertificateParsingException e) {
-                        //throw new RuntimeException(e);
+                        scanIpAddress(ipAddress.toString(), bw, result);
+                    } catch (Exception e) {
+                        System.err.println("Exception handled while scan IP: " + ipAddress.toString());
                     }
-                });
+                }
             }));
             threads.get(threads.size()-1).start();
         }
         for (Thread thread : threads) {
-            try {
-                thread.join();
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
+            thread.join();
         }
+        bw.close();
+        fw.close();
 
-        try {
-            bw.close();
-            fw.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        return result;
     }
 
     public static <T> List<List<T>> splitArrayList(List<T> source, int chunkSize) {
@@ -103,19 +81,14 @@ public class DomenScaner {
         return destination;
     }
 
-    private static void scanIpAddress(String ipAddress, BufferedWriter bw) throws IOException, CertificateParsingException {
+    private static void scanIpAddress(String ipAddress, BufferedWriter bw, List<String> result) throws IOException, CertificateParsingException, NoSuchAlgorithmException, KeyStoreException, KeyManagementException {
         CloseableHttpClient httpClient = null;
         try {
-            // create http response certificate interceptor
             HttpResponseInterceptor certificateInterceptor = (httpResponse, context) -> {
                 ManagedHttpClientConnection routedConnection = (ManagedHttpClientConnection)context.getAttribute(HttpCoreContext.HTTP_CONNECTION);
                 SSLSession sslSession = routedConnection.getSSLSession();
                 if (sslSession != null) {
-
-                    // get the server certificates from the {@Link SSLSession}
                     Certificate[] certificates = sslSession.getPeerCertificates();
-
-                    // add the certificates to the context, where we can later grab it from
                     context.setAttribute(PEER_CERTIFICATES, certificates);
                 }
             };
@@ -135,25 +108,20 @@ public class DomenScaner {
             final BasicHttpClientConnectionManager connectionManager =
                     new BasicHttpClientConnectionManager(socketFactoryRegistry);
 
-            // create closable http client and assign the certificate interceptor
             httpClient = HttpClients
                     .custom()
                     .setConnectionManager(connectionManager)
                     .addInterceptorLast(certificateInterceptor)
                     .build();
 
-            // make HTTP GET request to resource server
             HttpGet httpget = new HttpGet("https://" + ipAddress);
             System.out.println("Executing request " + httpget.getRequestLine());
 
-            // create http context where the certificate will be added
             HttpContext context = new BasicHttpContext();
             httpClient.execute(httpget, context);
 
-            // obtain the server certificates from the context
             Certificate[] peerCertificates = (Certificate[])context.getAttribute(PEER_CERTIFICATES);
 
-            // loop over certificates and print meta-data
             for (Certificate certificate : peerCertificates){
                 X509Certificate real = (X509Certificate) certificate;
                 if(real.getSubjectAlternativeNames() != null)
@@ -164,28 +132,19 @@ public class DomenScaner {
                                     try {
                                         bw.write("IP: " + ipAddress + ", Domain: " + name.toString() + "\n");
                                         bw.flush();
+                                        result.add("IP: " + ipAddress + ", Domain: " + name.toString());
                                     } catch (IOException e) {
-                                        throw new RuntimeException(e);
+                                        System.err.println("Exception handled while write Domain for IP: " + ipAddress.toString());
                                     }
                             });
                     });
             }
-
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException(e);
-        } catch (KeyStoreException e) {
-            throw new RuntimeException(e);
-        } catch (KeyManagementException e) {
-            throw new RuntimeException(e);
+        } catch (NoSuchAlgorithmException | KeyStoreException | KeyManagementException e) {
+            throw e;
         } finally {
-            // close httpclient
-            try {
-                httpClient.close();
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+            assert httpClient != null;
+            httpClient.close();
         }
     }
-
 
 }
