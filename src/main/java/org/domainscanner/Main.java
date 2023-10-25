@@ -1,4 +1,4 @@
-package org.domenscaner;
+package org.domainscanner;
 
 import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
@@ -32,7 +32,7 @@ public class Main {
                 String IP = ctx.formParam("ip");
                 int threadNum = Integer.parseInt(ctx.formParam("threadNum"));
                 String fileName = File.createTempFile("IPAddresses_Domains_", ".txt").getName();
-                List<String> result = DomenScaner.scan(IP, threadNum, fileName);
+                List<String> result = DomainScanner.scan(IP, threadNum, fileName);
                 ctx.render("/templates/home.html", model(
                         "ip", IP
                         , "threadNum", threadNum

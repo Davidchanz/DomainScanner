@@ -1,4 +1,4 @@
-package org.domenscaner;
+package org.domainscanner;
 
 import inet.ipaddr.IPAddress;
 import inet.ipaddr.IPAddressSeqRange;
@@ -35,7 +35,7 @@ import java.security.cert.CertificateParsingException;
 import java.security.cert.X509Certificate;
 import java.util.*;
 
-public class DomenScaner {
+public class DomainScanner {
     public static final String PEER_CERTIFICATES = "PEER_CERTIFICATES";
     public static List<String> scan(String ipRange, int threadNum, String filename) throws IOException, InterruptedException {
         FileWriter fw;
